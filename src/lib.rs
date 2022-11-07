@@ -1,6 +1,6 @@
 use interprocess::local_socket::tokio::{LocalSocketListener, LocalSocketStream, OwnedWriteHalf, OwnedReadHalf};
 use tokio::{sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, task::JoinHandle};
-use std::{io::Error as IOError, mem::take};
+use std::{io::Error as IOError, mem::take, collections::HashSet};
 use futures_lite::io::{AsyncReadExt, AsyncWriteExt};
 
 
@@ -127,7 +127,7 @@ pub struct ConsoleClient {
 
 
 impl ConsoleClient {
-    pub async fn connect(bind_addr: String) -> Result<Self, IOError> {
+    pub async fn connect(bind_addr: &str) -> Result<Self, IOError> {
         LocalSocketStream::connect(bind_addr).await.map(|pipe| Self { pipe })
     }
 
@@ -137,23 +137,24 @@ impl ConsoleClient {
 }
 
 
-#[macro_export]
-macro_rules! forward_args {
-    (
-        bind_addr: literal,
-        disconnected_msg: literal,
-        send_err_msg: literal,
-        $($to_forward: literal,)*
-    ) => {{
-        let args: Vec<String> = env::args().collect();
-        match args.get(0).unwrap() {
-            $($to_forward |)* => {
-                ConsoleClient::connect($bind_addr)
-                    .expect(disconnected_msg)
-                    .send(args.join(" ").as_str())
-                    .expect(send_err_msg)
+pub enum InterceptResult {
+    NoMatch(Vec<String>),
+    Matched(Result<(), IOError>)
+}
+
+
+pub async fn intercept_args(bind_addr: &str, commands_to_intercept: HashSet<&str>) -> InterceptResult {
+    let args: Vec<String> = std::env::args().collect();
+    if commands_to_intercept.contains(args.get(0).unwrap().as_str()) {
+        InterceptResult::Matched(
+            match ConsoleClient::connect(bind_addr).await {
+                Ok(mut client) => {
+                    client.send(args.join(" ").to_string().as_str()).await
+                }
+                Err(e) => Err(e)
             }
-            _ => {}
-        }
-    }};
+        )
+    } else {
+        InterceptResult::NoMatch(args)
+    }
 }
