@@ -1,6 +1,6 @@
 use interprocess::local_socket::tokio::{LocalSocketListener, LocalSocketStream, OwnedWriteHalf, OwnedReadHalf};
 use tokio::{sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, task::JoinHandle};
-use std::io::Error as IOError;
+use std::{io::Error as IOError, mem::take};
 use futures_lite::io::{AsyncReadExt, AsyncWriteExt};
 
 
@@ -65,6 +65,14 @@ impl<T: CommunicationState + Send + 'static> ReceiveEvent<T> {
             }
         });
     }
+
+    pub fn take_message(&mut self) -> String {
+        take(&mut self.message)
+    }
+
+    pub fn get_writer(&mut self) -> &mut OwnedWriteHalf {
+        &mut self.writer
+    }
 }
 
 
@@ -75,8 +83,8 @@ pub struct ConsoleServer<T: CommunicationState + Send + 'static> {
 
 
 impl<T: CommunicationState + Send + 'static> ConsoleServer<T> {
-    pub fn bind(bind_addr: String, buf_size: usize) -> Result<Self, IOError> {
-        let mut server = LocalSocketListener::bind(bind_addr)?;
+    pub fn bind(bind_addr: &str, buf_size: usize) -> Result<Self, IOError> {
+        let server = LocalSocketListener::bind(bind_addr)?;
         let (sender, receiver) = unbounded_channel();
 
         let handle = tokio::spawn(async move {
