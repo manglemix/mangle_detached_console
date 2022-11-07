@@ -1,70 +1,126 @@
-use mangle_local_pipes::{PipeServer, LocalPipe};
-use tokio::{sync::mpsc::{unbounded_channel, UnboundedReceiver}, io::{AsyncReadExt, AsyncWriteExt}};
+use interprocess::local_socket::tokio::{LocalSocketListener, LocalSocketStream, OwnedWriteHalf, OwnedReadHalf};
+use tokio::{sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, task::JoinHandle};
 use std::io::Error as IOError;
+use futures_lite::io::{AsyncReadExt, AsyncWriteExt};
 
 
-pub struct ConsoleServer {
-    receiver: UnboundedReceiver<String>
+pub trait CommunicationState {
+    fn new() -> Self;
 }
 
 
-impl ConsoleServer {
-    pub async fn bind(bind_addr: String, buf_size: usize) -> Result<Self, IOError> {
-        let mut server = PipeServer::bind(bind_addr).await?;
-        let (sender, receiver) = unbounded_channel();
+impl CommunicationState for () {
+    fn new() -> Self {
+        ()
+    }
+}
+
+
+pub struct ReceiveEvent<T: CommunicationState + Send + 'static> {
+    message: String,
+    sender: UnboundedSender<Self>,
+    reader: OwnedReadHalf,
+    writer: OwnedWriteHalf,
+    buf_size: usize,
+    state: T
+}
+
+
+impl<T: CommunicationState + Send + 'static> ReceiveEvent<T> {
+    pub fn deferred_read(mut self) {
+        self.message = String::new();
 
         tokio::spawn(async move {
+            let mut running_buffer = Vec::new();
+
             loop {
-                let mut pipe = match server.accept().await {
+                let mut buffer = vec![0; self.buf_size];
+
+                let read_size = match self.reader.read(buffer.as_mut_slice()).await {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(_) => break
+                };
+
+                running_buffer.extend_from_slice(buffer.split_at(read_size).0);
+
+                let message = match String::from_utf8(running_buffer.clone()) {
                     Ok(x) => x,
+                    Err(e) => continue
+                };
+
+                if !message.ends_with('\n') {
+                    continue
+                }
+
+                let _ = self.sender.send(ReceiveEvent {
+                    message,
+                    sender: self.sender.clone(),
+                    reader: self.reader,
+                    writer: self.writer,
+                    buf_size: self.buf_size,
+                    state: self.state,
+                });
+                break
+            }
+        });
+    }
+}
+
+
+pub struct ConsoleServer<T: CommunicationState + Send + 'static> {
+    receiver: UnboundedReceiver<ReceiveEvent<T>>,
+    handle: JoinHandle<()>
+}
+
+
+impl<T: CommunicationState + Send + 'static> ConsoleServer<T> {
+    pub fn bind(bind_addr: String, buf_size: usize) -> Result<Self, IOError> {
+        let mut server = LocalSocketListener::bind(bind_addr)?;
+        let (sender, receiver) = unbounded_channel();
+
+        let handle = tokio::spawn(async move {
+            loop {
+                let (reader, writer) = match server.accept().await {
+                    Ok(x) => x.into_split(),
                     Err(_) => continue
                 };
 
-                let new_sender = sender.clone();
-
-                tokio::spawn(async move {
-                    let mut buffer = vec![0; buf_size];
-
-                    loop {
-                        let read_size = match pipe.read(buffer.as_mut_slice()).await {
-                            Ok(0) => break,
-                            Ok(n) => n,
-                            Err(_) => break
-                        };
-
-                        let message = match String::from_utf8(
-                            buffer.split_at(read_size).0.into()
-                        ) {
-                            Ok(x) => x,
-                            Err(_) => break
-                        };
-
-                        match new_sender.send(message) {
-                            Ok(_) => {}
-                            Err(_) => break
-                        };
-                    }
-                });
+                ReceiveEvent {
+                    message: String::new(),
+                    sender: sender.clone(),
+                    reader,
+                    writer,
+                    buf_size,
+                    state: T::new()
+                }.deferred_read();
             }
         });
 
-        Ok(Self { receiver })
+        Ok(Self { receiver, handle })
     }
 
-    pub async fn read(&mut self) -> String {
+    pub async fn accept(&mut self) -> ReceiveEvent<T> {
         self.receiver.recv().await.unwrap()
     }
 }
 
 
+impl<T: CommunicationState + Send + 'static> Drop for ConsoleServer<T> {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+
 pub struct ConsoleClient {
-    pipe: LocalPipe
+    pipe: LocalSocketStream
 }
 
 
 impl ConsoleClient {
-    pub fn connect(bind_addr: String) -> Result<Self, IOError> {
-        mangle_local_pipes::connect(bind_addr).map(|pipe| Self { pipe })
+    pub async fn connect(bind_addr: String) -> Result<Self, IOError> {
+        LocalSocketStream::connect(bind_addr).await.map(|pipe| Self { pipe })
     }
 
     pub async fn send(&mut self, message: &str) -> Result<(), IOError> {
