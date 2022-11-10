@@ -41,7 +41,6 @@ impl ConsoleServer {
 
                 let mut reader = BufReader::new(reader);
 
-                eprintln!("LMAO");
                 let sender = sender.clone();
 
                 tokio::spawn(async move {
@@ -53,8 +52,6 @@ impl ConsoleServer {
                     }
 
                     message.pop();
-
-                    eprintln!("LMAO2");
 
                     let _ = sender.send(ReceiveEvent {
                         message,
