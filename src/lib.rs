@@ -77,7 +77,30 @@ impl Drop for ConsoleServer {
 }
 
 
-pub async fn send_message(bind_addr: &str, message: String) -> Result<String, IOError> {
+pub enum ConsoleSendError {
+    NotFound,
+    PermissionDenied,
+    OtherSocketClosed,
+    GenericError(IOError)
+}
+
+
+impl From<IOError> for ConsoleSendError {
+    fn from(e: IOError) -> Self {
+        if let Some(233) = e.raw_os_error() {
+            return ConsoleSendError::OtherSocketClosed
+        }
+
+        match e.kind() {
+            ErrorKind::PermissionDenied => ConsoleSendError::PermissionDenied,
+            ErrorKind::NotFound => ConsoleSendError::NotFound,
+            _ => ConsoleSendError::GenericError(e)
+        }
+    }
+}
+
+
+pub async fn send_message(bind_addr: &str, message: String) -> Result<String, ConsoleSendError> {
     let mut socket = LocalSocketStream::connect(bind_addr).await?;
 
     socket.write_all((message + "\n").as_bytes()).await?;
@@ -86,34 +109,11 @@ pub async fn send_message(bind_addr: &str, message: String) -> Result<String, IO
     let mut msg = String::new();
     match socket.read_to_string(&mut msg).await {
         Ok(_) => {}
-        Err(e) => {
-            if let Some(n) = e.raw_os_error() {
-                if n != 233 {
-                    return Err(e)
-                }
-            } else {
-                return Err(e)
-            }
+        Err(e) => match e.into() {
+            ConsoleSendError::OtherSocketClosed => {}
+            e => return Err(e)
         }
     }
-    Ok(msg)
-}
-
-
-pub enum InterceptResult {
-    NoMatch(Vec<String>),
-    Matched(Result<String, IOError>)
-}
-
-
-pub async fn intercept_args(bind_addr: &str, commands_to_intercept: HashSet<&str>) -> InterceptResult {
-    let args: Vec<String> = std::env::args().collect();
     
-    if commands_to_intercept.contains(args.get(1).unwrap().as_str()) {
-        InterceptResult::Matched(
-            send_message(bind_addr, args.join(" ").to_string()).await
-        )
-    } else {
-        InterceptResult::NoMatch(args)
-    }
+    Ok(msg)
 }
