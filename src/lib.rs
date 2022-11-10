@@ -78,17 +78,22 @@ impl Drop for ConsoleServer {
 }
 
 
-pub async fn send_message(bind_addr: &str, message: &str) -> Result<OwnedReadHalf, IOError> {
-    let (reader, mut writer) = LocalSocketStream::connect(bind_addr).await?.into_split();
+
+
+
+pub async fn send_message(bind_addr: &str, message: &str) -> Result<String, IOError> {
+    let (mut reader, mut writer) = LocalSocketStream::connect(bind_addr).await?.into_split();
     writer.write_all(message.as_bytes()).await?;
     writer.close().await?;
-    Ok(reader)
+    let mut msg = String::new();
+    reader.read_to_string(&mut msg).await?;
+    Ok(msg)
 }
 
 
 pub enum InterceptResult {
     NoMatch(Vec<String>),
-    Matched(Result<OwnedReadHalf, IOError>)
+    Matched(Result<String, IOError>)
 }
 
 
