@@ -39,6 +39,7 @@ impl ConsoleServer {
                     Err(_) => continue
                 };
 
+                eprintln!("LMAO");
                 let sender = sender.clone();
 
                 tokio::spawn(async move {
@@ -48,6 +49,7 @@ impl ConsoleServer {
                         Ok(_) => {}
                         Err(_) => return
                     }
+                    eprintln!("LMAO2");
     
                     let message = match String::from_utf8(buffer) {
                         Ok(x) => x,
@@ -76,9 +78,6 @@ impl Drop for ConsoleServer {
         self.handle.abort();
     }
 }
-
-
-
 
 
 pub async fn send_message(bind_addr: &str, message: &str) -> Result<String, IOError> {
