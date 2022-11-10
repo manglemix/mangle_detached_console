@@ -1,7 +1,7 @@
-use interprocess::local_socket::tokio::{LocalSocketListener, LocalSocketStream, OwnedWriteHalf, OwnedReadHalf};
+use interprocess::local_socket::tokio::{LocalSocketListener, LocalSocketStream, OwnedWriteHalf};
 use tokio::{sync::mpsc::{unbounded_channel, UnboundedReceiver}, task::JoinHandle};
-use std::{io::Error as IOError, mem::take, collections::HashSet};
-use futures_lite::io::{AsyncReadExt, AsyncWriteExt};
+use std::{io::{Error as IOError, ErrorKind}, mem::take, collections::HashSet};
+use futures::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, AsyncReadExt};
 
 
 pub struct ReceiveEvent {
@@ -15,8 +15,8 @@ impl ReceiveEvent {
         take(&mut self.message)
     }
 
-    pub fn get_writer(&mut self) -> &mut OwnedWriteHalf {
-        &mut self.writer
+    pub async fn write_all(&mut self, message: &str) -> Result<(), IOError> {
+        self.writer.write_all(message.as_bytes()).await
     }
 }
 
@@ -34,31 +34,31 @@ impl ConsoleServer {
 
         let handle = tokio::spawn(async move {
             loop {
-                let (mut reader, writer) = match server.accept().await {
+                let (reader, writer) = match server.accept().await {
                     Ok(x) => x.into_split(),
                     Err(_) => continue
                 };
+
+                let mut reader = BufReader::new(reader);
 
                 eprintln!("LMAO");
                 let sender = sender.clone();
 
                 tokio::spawn(async move {
-                    let mut buffer = Vec::new();
-    
-                    match reader.read_to_end(&mut buffer).await {
+                    let mut message = String::new();
+
+                    match reader.read_line(&mut message).await {
                         Ok(_) => {}
                         Err(_) => return
                     }
+
+                    message.pop();
+
                     eprintln!("LMAO2");
-    
-                    let message = match String::from_utf8(buffer) {
-                        Ok(x) => x,
-                        Err(_) => return
-                    };
-    
+
                     let _ = sender.send(ReceiveEvent {
                         message,
-                        writer: writer,
+                        writer,
                     });
                 });
             }
@@ -80,12 +80,25 @@ impl Drop for ConsoleServer {
 }
 
 
-pub async fn send_message(bind_addr: &str, message: &str) -> Result<String, IOError> {
-    let (mut reader, mut writer) = LocalSocketStream::connect(bind_addr).await?.into_split();
-    writer.write_all(message.as_bytes()).await?;
-    writer.close().await?;
+pub async fn send_message(bind_addr: &str, message: String) -> Result<String, IOError> {
+    let mut socket = LocalSocketStream::connect(bind_addr).await?;
+
+    socket.write_all((message + "\n").as_bytes()).await?;
+    socket.flush().await?;
+
     let mut msg = String::new();
-    reader.read_to_string(&mut msg).await?;
+    match socket.read_to_string(&mut msg).await {
+        Ok(_) => {}
+        Err(e) => {
+            if let Some(n) = e.raw_os_error() {
+                if n != 233 {
+                    return Err(e)
+                }
+            } else {
+                return Err(e)
+            }
+        }
+    }
     Ok(msg)
 }
 
@@ -101,7 +114,7 @@ pub async fn intercept_args(bind_addr: &str, commands_to_intercept: HashSet<&str
     
     if commands_to_intercept.contains(args.get(1).unwrap().as_str()) {
         InterceptResult::Matched(
-            send_message(bind_addr, args.join(" ").to_string().as_str()).await
+            send_message(bind_addr, args.join(" ").to_string()).await
         )
     } else {
         InterceptResult::NoMatch(args)
