@@ -4,29 +4,13 @@ use std::{io::Error as IOError, mem::take, collections::HashSet};
 use futures_lite::io::{AsyncReadExt, AsyncWriteExt};
 
 
-pub trait CommunicationState {
-    fn new() -> Self;
-}
-
-
-impl CommunicationState for () {
-    fn new() -> Self {
-        ()
-    }
-}
-
-
-pub struct ReceiveEvent<T: CommunicationState + Send + 'static> {
+pub struct ReceiveEvent {
     message: String,
-    sender: UnboundedSender<Self>,
-    reader: OwnedReadHalf,
-    writer: OwnedWriteHalf,
-    buf_size: usize,
-    state: T
+    writer: OwnedWriteHalf
 }
 
 
-impl<T: CommunicationState + Send + 'static> ReceiveEvent<T> {
+impl ReceiveEvent {
     pub fn deferred_read(mut self) {
         self.message = String::new();
 
@@ -76,14 +60,14 @@ impl<T: CommunicationState + Send + 'static> ReceiveEvent<T> {
 }
 
 
-pub struct ConsoleServer<T: CommunicationState + Send + 'static> {
-    receiver: UnboundedReceiver<ReceiveEvent<T>>,
+pub struct ConsoleServer {
+    receiver: UnboundedReceiver<ReceiveEvent>,
     handle: JoinHandle<()>
 }
 
 
-impl<T: CommunicationState + Send + 'static> ConsoleServer<T> {
-    pub fn bind(bind_addr: &str, buf_size: usize) -> Result<Self, IOError> {
+impl ConsoleServer {
+    pub fn bind(bind_addr: &str) -> Result<Self, IOError> {
         let server = LocalSocketListener::bind(bind_addr)?;
         let (sender, receiver) = unbounded_channel();
 
@@ -94,46 +78,48 @@ impl<T: CommunicationState + Send + 'static> ConsoleServer<T> {
                     Err(_) => continue
                 };
 
-                ReceiveEvent {
-                    message: String::new(),
-                    sender: sender.clone(),
-                    reader,
-                    writer,
-                    buf_size,
-                    state: T::new()
-                }.deferred_read();
+                tokio::spawn(async move {
+                    let mut buffer = Vec::new();
+    
+                    match reader.read_to_end(&mut buffer).await {
+                        Ok(_) => {}
+                        Err(_) => return
+                    }
+    
+                    let message = match String::from_utf8(buffer) {
+                        Ok(x) => x,
+                        Err(e) => return
+                    };
+    
+                    let _ = self.sender.send(ReceiveEvent {
+                        message,
+                        writer: writer,
+                    });
+                });
             }
         });
 
         Ok(Self { receiver, handle })
     }
 
-    pub async fn accept(&mut self) -> ReceiveEvent<T> {
+    pub async fn accept(&mut self) -> ReceiveEvent {
         self.receiver.recv().await.unwrap()
     }
 }
 
 
-impl<T: CommunicationState + Send + 'static> Drop for ConsoleServer<T> {
+impl Drop for ConsoleServer {
     fn drop(&mut self) {
         self.handle.abort();
     }
 }
 
 
-pub struct ConsoleClient {
-    pipe: LocalSocketStream
-}
-
-
-impl ConsoleClient {
-    pub async fn connect(bind_addr: &str) -> Result<Self, IOError> {
-        LocalSocketStream::connect(bind_addr).await.map(|pipe| Self { pipe })
-    }
-
-    pub async fn send(&mut self, message: &str) -> Result<(), IOError> {
-        self.pipe.write_all(message.as_bytes()).await
-    }
+pub async fn send_message(bind_addr: &str, message: &str) -> Result<OwnedReadHalf, IOError> {
+    let (reader, writer) = LocalSocketStream::connect(bind_addr).await?.into_split();
+    writer.write_all(message.as_bytes()).await?;
+    writer.close().await?;
+    Ok(reader)
 }
 
 
@@ -148,12 +134,7 @@ pub async fn intercept_args(bind_addr: &str, commands_to_intercept: HashSet<&str
     
     if commands_to_intercept.contains(args.get(1).unwrap().as_str()) {
         InterceptResult::Matched(
-            match ConsoleClient::connect(bind_addr).await {
-                Ok(mut client) => {
-                    client.send(args.join(" ").to_string().as_str()).await
-                }
-                Err(e) => Err(e)
-            }
+            send_message(bind_addr, rgs.join(" ").to_string().as_str())
         )
     } else {
         InterceptResult::NoMatch(args)
