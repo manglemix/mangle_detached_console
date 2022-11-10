@@ -77,6 +77,7 @@ impl Drop for ConsoleServer {
 }
 
 
+#[derive(Debug)]
 pub enum ConsoleSendError {
     NotFound,
     PermissionDenied,
