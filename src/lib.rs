@@ -145,7 +145,7 @@ pub enum InterceptResult {
 
 pub async fn intercept_args(bind_addr: &str, commands_to_intercept: HashSet<&str>) -> InterceptResult {
     let args: Vec<String> = std::env::args().collect();
-    println!("{:?}", args);
+    
     if commands_to_intercept.contains(args.get(1).unwrap().as_str()) {
         InterceptResult::Matched(
             match ConsoleClient::connect(bind_addr).await {

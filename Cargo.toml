@@ -1,5 +1,5 @@
 [package]
-name = "mangle_detached_console"
+name = "mangle-detached-console"
 version = "0.1.0"
 edition = "2021"
 
