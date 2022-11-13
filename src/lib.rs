@@ -1,5 +1,3 @@
-#![feature(let_chains)]
-
 use interprocess::local_socket::tokio::{LocalSocketListener, LocalSocketStream, OwnedWriteHalf};
 use tokio::{sync::mpsc::{unbounded_channel, UnboundedReceiver}, task::JoinHandle};
 use std::{io::{Error as IOError, ErrorKind}, mem::take, collections::HashSet};
@@ -90,8 +88,12 @@ pub enum ConsoleSendError {
 
 impl From<IOError> for ConsoleSendError {
     fn from(e: IOError) -> Self {
-        if let Some(n) = e.raw_os_error() && (n == 233 || n == 111) {
-            return ConsoleSendError::OtherSocketClosed
+        if let Some(n) = e.raw_os_error() {
+            match n {
+                233 => return ConsoleSendError::OtherSocketClosed,
+                111 => return ConsoleSendError::NotFound,
+                _ => {}
+            }
         }
 
         match e.kind() {
