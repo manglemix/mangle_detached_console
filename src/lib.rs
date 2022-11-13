@@ -1,6 +1,6 @@
 use interprocess::local_socket::tokio::{LocalSocketListener, LocalSocketStream, OwnedWriteHalf};
 use tokio::{sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, select};
-use std::{io::{Error as IOError, ErrorKind}, mem::take};
+use std::{io::{Error as IOError, ErrorKind}, mem::take, path::Path, fs::remove_file, ffi::OsStr};
 use futures::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, AsyncReadExt};
 
 
@@ -28,7 +28,14 @@ pub struct ConsoleServer {
 
 
 impl ConsoleServer {
-    pub fn bind(bind_addr: &str) -> Result<Self, IOError> {
+    pub fn bind(bind_addr: &OsStr) -> Result<Self, IOError> {
+        {
+            let path = AsRef::<Path>::as_ref(bind_addr);
+            if path.is_file() {
+                remove_file(path)?;
+            }
+        }
+
         let server = LocalSocketListener::bind(bind_addr)?;
         let (sender, receiver) = unbounded_channel();
         let (_alive_sender, mut alive_receiver) = unbounded_channel();
