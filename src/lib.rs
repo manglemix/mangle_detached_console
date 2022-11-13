@@ -31,7 +31,7 @@ impl ConsoleServer {
     pub fn bind(bind_addr: &OsStr) -> Result<Self, IOError> {
         {
             let path = AsRef::<Path>::as_ref(bind_addr);
-            if path.is_file() {
+            if path.exists() {
                 remove_file(path)?;
             }
         }
