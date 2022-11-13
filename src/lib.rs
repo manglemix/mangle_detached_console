@@ -88,7 +88,7 @@ pub enum ConsoleSendError {
 
 impl From<IOError> for ConsoleSendError {
     fn from(e: IOError) -> Self {
-        if let Some(233) = e.raw_os_error() {
+        if let Some(n) = e.raw_os_error() && (n == 233 || n == 111) {
             return ConsoleSendError::OtherSocketClosed
         }
 
