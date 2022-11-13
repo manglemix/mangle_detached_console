@@ -122,7 +122,7 @@ impl From<IOError> for ConsoleSendError {
 }
 
 
-pub async fn send_message(bind_addr: &str, message: String) -> Result<String, ConsoleSendError> {
+pub async fn send_message(bind_addr: &OsStr, message: String) -> Result<String, ConsoleSendError> {
     let mut socket = LocalSocketStream::connect(bind_addr).await?;
 
     socket.write_all((message + "\n").as_bytes()).await?;
