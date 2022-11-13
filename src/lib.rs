@@ -1,6 +1,6 @@
 use interprocess::local_socket::tokio::{LocalSocketListener, LocalSocketStream, OwnedWriteHalf};
-use tokio::{sync::mpsc::{unbounded_channel, UnboundedReceiver}, task::JoinHandle};
-use std::{io::{Error as IOError, ErrorKind}, mem::take, collections::HashSet};
+use tokio::{sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, select};
+use std::{io::{Error as IOError, ErrorKind}, mem::take};
 use futures::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, AsyncReadExt};
 
 
@@ -22,8 +22,8 @@ impl ReceiveEvent {
 
 
 pub struct ConsoleServer {
-    receiver: UnboundedReceiver<ReceiveEvent>,
-    handle: JoinHandle<()>
+    receiver: UnboundedReceiver<Result<ReceiveEvent, IOError>>,
+    _alive_sender: UnboundedSender<()>
 }
 
 
@@ -31,12 +31,23 @@ impl ConsoleServer {
     pub fn bind(bind_addr: &str) -> Result<Self, IOError> {
         let server = LocalSocketListener::bind(bind_addr)?;
         let (sender, receiver) = unbounded_channel();
+        let (_alive_sender, mut alive_receiver) = unbounded_channel();
 
-        let handle = tokio::spawn(async move {
+        tokio::spawn(async move {
             loop {
-                let (reader, writer) = match server.accept().await {
-                    Ok(x) => x.into_split(),
-                    Err(_) => continue
+                let (reader, writer) = select! {
+                    res = server.accept() => {
+                        match res {
+                            Ok(x) => x.into_split(),
+                            Err(e) => {
+                                if sender.send(Err(e)).is_err() {
+                                    return
+                                }
+                                continue
+                            }
+                        }
+                    }
+                    _ = alive_receiver.recv() => return
                 };
 
                 let mut reader = BufReader::new(reader);
@@ -48,31 +59,30 @@ impl ConsoleServer {
 
                     match reader.read_line(&mut message).await {
                         Ok(_) => {}
-                        Err(_) => return
+                        Err(e) => {
+                            let _ = sender.send(Err(e));
+                            return
+                        }
                     }
 
+                    // remove newline
                     message.pop();
 
-                    let _ = sender.send(ReceiveEvent {
+                    if sender.send(Ok(ReceiveEvent {
                         message,
                         writer,
-                    });
+                    })).is_err() {
+                        return
+                    }
                 });
             }
         });
 
-        Ok(Self { receiver, handle })
+        Ok(Self { receiver, _alive_sender })
     }
 
-    pub async fn accept(&mut self) -> ReceiveEvent {
+    pub async fn accept(&mut self) -> Result<ReceiveEvent, IOError> {
         self.receiver.recv().await.unwrap()
-    }
-}
-
-
-impl Drop for ConsoleServer {
-    fn drop(&mut self) {
-        self.handle.abort();
     }
 }
 
