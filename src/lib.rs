@@ -1,6 +1,6 @@
 use interprocess::local_socket::tokio::{LocalSocketListener, LocalSocketStream, OwnedWriteHalf};
 use tokio::{sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, select};
-use std::{io::{Error as IOError, ErrorKind}, mem::take, path::Path, fs::remove_file, ffi::OsStr};
+use std::{io::{Error as IOError, ErrorKind}, mem::take, path::Path, fs::remove_file, ffi::OsStr, fmt::Display};
 use futures::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, AsyncReadExt};
 
 
@@ -101,6 +101,16 @@ pub enum ConsoleSendError {
     OtherSocketClosed,
     GenericError(IOError)
 }
+
+
+impl Display for ConsoleSendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+
+impl std::error::Error for ConsoleSendError {}
 
 
 impl From<IOError> for ConsoleSendError {
