@@ -5,13 +5,13 @@ use futures::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, AsyncReadExt};
 
 
 pub struct ReceiveEvent {
-    message: String,
+    message: Option<String>,
     writer: OwnedWriteHalf
 }
 
 
 impl ReceiveEvent {
-    pub fn take_message(&mut self) -> String {
+    pub fn take_message(&mut self) -> Option<String> {
         take(&mut self.message)
     }
 
@@ -76,7 +76,7 @@ impl ConsoleServer {
                     message.pop();
 
                     if sender.send(Ok(ReceiveEvent {
-                        message,
+                        message: Some(message),
                         writer,
                     })).is_err() {
                         return
